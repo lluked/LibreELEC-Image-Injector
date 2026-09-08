@@ -1,0 +1,8 @@
+[global]
+Name = Wifi
+Description = Wifi service config file
+
+[service_myhome]
+Type = wifi
+Name = YOUR_WIFI_SSID
+Passphrase = YOUR_WIFI_PASSWORD
