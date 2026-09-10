@@ -192,11 +192,8 @@ for source_image in "${source_images[@]}"; do
     chmod 700 "$mount_dir/.ssh"
     chmod 600 "$mount_dir/.ssh/authorized_keys"
 
-    # Same file LE Settings' SSH toggle writes (state=on, "secure"/key-only
-    # mode). The "ssh" boot cmdline flag above was reported not reliably
-    # starting sshd on real hardware; this replicates the mechanism known
-    # to work when toggled through the UI instead, so both are set rather
-    # than relying on the boot flag alone.
+    # Same file LE Settings' SSH toggle writes in "secure"/key-only mode
+    # (SSHD_DISABLE_PW_AUTH + SSH_ARGS).
     printf '==> Enabling sshd via LE Settings config (key-only)\n'
     mkdir -p "$mount_dir/.cache/services"
     printf "SSHD_DISABLE_PW_AUTH=true\nSSH_ARGS=-o 'PasswordAuthentication no'\n" > "$mount_dir/.cache/services/sshd.conf"

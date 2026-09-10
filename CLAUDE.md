@@ -12,6 +12,7 @@ diffs under `config/system-patches/`.
   thought to be Y"). Superseded findings can inform the rewrite, but the
   doc itself should always read as if it were written fresh from today's
   understanding, never as a change-log or edit history.
+- When a finding here turns out to be not relevant anymore, remove it.
 - Before editing this file, and periodically otherwise, check whether
   its existing content is still relevant against the current state of
   the repo (the actual scripts and diffs, not memory of them) — cross
@@ -107,9 +108,10 @@ a previous boot after a reboot, including the crucial *true first boot*.
   pulls in nothing else, `sysinit.target` included).
 
 ## Why `/storage/.cache/systemd-machine-id` shows up before `fs-resize` runs
-- Debug logging added to this repo's injected images writing to a 
-  persistent `/flash/fs-resize.log`, (sampled immediately before the 
-  guard check runs) directly confirmed `machine-id.service` had already 
+
+- Debug logging added to this repo's injected images, writing to a
+  persistent `/flash/fs-resize.log` (sampled immediately before the
+  guard check runs), directly confirmed `machine-id.service` had already
   completed and written the file by that point.
 - Why `machine-id.service` runs during a boot that's supposed to
   exclude it remains unexplained; `cache_has_unexpected_content()`
