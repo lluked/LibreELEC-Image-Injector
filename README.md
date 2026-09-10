@@ -108,28 +108,35 @@ The result lands in `images/injected/`, named `<original>_injected.img`
   are preserved this way, not whatever ConnMan's runtime state has
   accumulated since boot.
 - The storage partition should auto-expand to fill the SD card on first
-  boot. LibreELEC's own `fs-resize` normally skips that expansion if
-  `/storage/.cache` has anything in it, on the theory that means Kodi has
-  already run — but WiFi/SSH provisioning puts files there before first
-  boot, and ConnMan itself writes its own `settings`/managed-PSK state into
-  `.cache/connman/` within seconds of actually connecting, so that check
-  trips even on a genuinely fresh device. The injector patches `fs-resize`
-  to only treat `.cache` as evidence of a real prior boot if it contains
-  something *other than* ConnMan's own `connman/` directory (whatever's
-  inside it is ConnMan's own business) or, inside `services/`, anything
-  other than this tool's own `sshd.conf` — LE Settings writes other
-  services' conf files (`samba.conf` etc.) into that same directory when a
-  user actually configures them via the UI, and *that* is real evidence of
-  prior setup, so only the one file this tool writes is trusted, not the
-  whole directory. Because `fs-resize`'s actual resize
-  step is a destructive `mke2fs` reformat (not an in-place grow), the patch
-  also backs up the provisioned WiFi config, SSH key, and `sshd.conf`
-  beforehand and restores them into the freshly-formatted partition
-  afterward, the same way the factory-reset patch does. If you're running
-  an injected image built before this fix, the partition
-  stays at its original (small) image size; resize it manually over SSH
-  with `parted /dev/sdX resizepart 2 100%` (needs `---pretend-input-tty`
-  piped `yes` if `/storage` is mounted) then `resize2fs /dev/sdX2`.
+  boot. LibreELEC's own `fs-resize` skips that expansion if `/storage/.cache`
+  has anything in it, on the theory that means Kodi has already run — but in
+  practice `.cache` reliably has *something* in it by the time `fs-resize`
+  gets a real chance to check: WiFi/SSH provisioning puts files there before
+  first boot, ConnMan writes its own `settings`/managed-PSK state within
+  seconds of actually connecting, and LibreELEC's own stock services (avahi,
+  bluetooth, cron) auto-enable and write their own conf files into
+  `.cache/services/` as part of the unattended first-run wizard — which
+  only sails through to that step without waiting on user input *because*
+  WiFi's already provisioned; without it the wizard would stall on the
+  network step waiting for someone to pick a network by remote, and never
+  reach them. The injector patches `fs-resize` to only treat `.cache` as
+  evidence of a real prior boot if it contains something *other than*
+  ConnMan's own `connman/` directory (whatever's inside it is ConnMan's own
+  business) or, inside `services/`, anything other than the handful of conf
+  files that get written there as stock behaviour regardless of this tool:
+  `sshd.conf` (this tool's own) plus `avahi.conf`/`bluez.conf`/`crond.conf`.
+  Anything else in `services/` (`samba.conf`, say, from a user actually
+  configuring it via the UI) *is* real evidence of prior setup, so only
+  those specific files are trusted, not the whole directory. Because
+  `fs-resize`'s actual resize step is a destructive `mke2fs` reformat (not
+  an in-place grow), the patch also backs up the provisioned WiFi config,
+  SSH key, and `sshd.conf` beforehand and restores them into the
+  freshly-formatted partition afterward, the same way the factory-reset
+  patch does. If you're running an injected image built before this fix,
+  the partition stays at its original (small) image size; resize it
+  manually over SSH with `parted /dev/sdX resizepart 2 100%` (needs
+  `---pretend-input-tty` piped `yes` if `/storage` is mounted) then
+  `resize2fs /dev/sdX2`.
 
 ## Files
 

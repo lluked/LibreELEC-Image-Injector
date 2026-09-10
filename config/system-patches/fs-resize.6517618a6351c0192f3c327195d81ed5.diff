@@ -1,6 +1,6 @@
 --- fs-resize
 +++ fs-resize
-@@ -10,6 +10,76 @@
+@@ -10,6 +10,88 @@
    StartProgress "$@"
  }
  
@@ -59,41 +59,51 @@
 +  fi
 +}
 +
-+# /storage/.cache is "clean" for resize purposes if the only things in it
-+# are ConnMan's own connman/ directory (whatever ConnMan itself has put
-+# inside it - provisioning files, its own settings, managed_psk state - is
-+# ConnMan's business, not evidence Kodi has run) and, inside services/,
-+# nothing but this tool's own sshd.conf - LE Settings writes other
-+# services' conf files (samba.conf etc.) into that same directory when a
-+# user actually configures them via the UI, and that *is* real evidence of
-+# prior setup, so only the one file this tool writes is trusted, not the
-+# whole directory. Anything else is a real signal of prior initialisation.
++# /storage/.cache is "clean" for resize purposes if the only things in
++# it are: systemd-machine-id (confirmed via debug logging at this exact
++# guard check on real hardware to be genuinely present within
++# fs-resize's own isolated boot - the only thing confirmed to appear
++# this early); ConnMan's own connman/ directory (whatever ConnMan itself
++# has put there is its business, not evidence Kodi has run); and, inside
++# services/, only this tool's own sshd.conf. This guard only runs once
++# per device (the .please_resize_me marker is deleted on every
++# evaluation), so anything else in services/ (avahi.conf, samba.conf,
++# say) is evidence a later boot already happened, and still blocks
++# resize.
 +cache_has_unexpected_content() {
-+  [ -d /storage/.cache/services ] && \
-+    [ -n "$(find /storage/.cache/services -mindepth 1 -maxdepth 1 ! -name sshd.conf -print -quit 2>/dev/null)" ] || \
-+    [ -n "$(find /storage/.cache -mindepth 1 -maxdepth 1 ! -name connman ! -name services -print -quit 2>/dev/null)" ]
++  if [ -d /storage/.cache/services ]; then
++    if [ -n "$(find /storage/.cache/services -mindepth 1 -maxdepth 1 \
++        ! -name sshd.conf \
++        -print -quit 2>/dev/null)" ]; then
++      return 0
++    fi
++  fi
++
++  [ -n "$(find /storage/.cache -mindepth 1 -maxdepth 1 \
++      ! -name systemd-machine-id \
++      ! -name connman \
++      ! -name services \
++      -print -quit 2>/dev/null)" ]
 +}
 +
  if [ -e /storage/.please_resize_me ] ; then
    . /usr/lib/libreelec/functions
  
-@@ -21,7 +91,14 @@
+@@ -21,7 +103,12 @@
  
    # this sh** was never intended to be used
    # on an already installed and running system
 -  if [ -d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache ] ; then
 +  # NB: /storage/.cache/connman and /storage/.cache/services are
-+  # deliberately not treated as evidence of that by themselves - headless
-+  # WiFi/SSH provisioning (before first boot) and ConnMan itself (within
-+  # seconds of first boot, the moment it actually connects) both
-+  # legitimately write there. Anything provisioned here that would
-+  # otherwise be lost to the mke2fs reformat below is backed up and
-+  # restored around it instead.
++  # deliberately not treated as evidence of that by themselves - see
++  # cache_has_unexpected_content() above. Whatever's provisioned here
++  # that would otherwise be lost to the mke2fs reformat below is backed
++  # up and restored around it instead.
 +  if [ -d /storage/.kodi -o -d /storage/.config ] || cache_has_unexpected_content ; then
      rm -f /storage/.please_resize_me
      sync
      echo "Resizing is not permitted - the system has already been initialised." | tee -a $LOG
-@@ -54,6 +131,9 @@
+@@ -54,6 +141,9 @@
  
    # just in case
    if [ ! -z "$DISK" -a ! -z "$PART" -a ! -z "$UUID" ] ; then
@@ -103,7 +113,7 @@
      umount $PART
  
      echo "PARTITION RESIZING IN PROGRESS"
-@@ -64,6 +144,11 @@
+@@ -64,6 +154,11 @@
      StartProgressLog spinner "Resizing partition...   " "parted -s -f -m $DISK resizepart 2 100% >>$LOG 2>&1"
      StartProgressLog spinner "Creating file system... " "mke2fs -F -q -t ext4 -m 0 -L \"$LABEL\" -U \"$UUID\" $PART >>$LOG 2>&1"
      StartProgressLog spinner "Checking file system... " "e2fsck -f -p $PART >>$LOG 2>&1"

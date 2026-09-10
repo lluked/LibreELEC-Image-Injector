@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
 # Patch LibreELEC scripts baked into the boot partition's SYSTEM squashfs:
-#   - usr/lib/libreelec/factory-reset: preserve WiFi and SSH config across a
-#     device reset instead of losing them to the storage wipe.
+#   - usr/lib/libreelec/factory-reset: preserve the provisioned WiFi config,
+#     the SSH key, and the sshd.conf that enables SSH across a device reset,
+#     instead of losing them to the storage wipe. Soft reset only needs
+#     WiFi + sshd.conf restored (its delete list never touches .ssh/); hard
+#     reset needs all three (it wipes everything).
 #   - usr/lib/libreelec/fs-resize: stop the on-device first-boot auto-resize
-#     from refusing to run just because /storage/.cache has anything in it
-#     (WiFi provisioning, and ConnMan itself the moment it connects, both
-#     put real content there before fs-resize ever checks — trying to
-#     itemize what's "allowed" there is a losing game, so the check is
-#     narrowed to .kodi/.config instead, which are the only unambiguous
-#     signs Kodi has actually run). Since fs-resize's actual resize step is
-#     a destructive mke2fs reformat, not an in-place grow, this patch also
-#     backs up the provisioned WiFi configs and SSH key beforehand and
-#     restores them into the freshly-formatted partition afterward — same
-#     backup/restore functions as the factory-reset patch below.
+#     from refusing to run just because /storage/.cache has something in it.
+#     WiFi/SSH provisioning, ConnMan itself (the moment it actually
+#     connects), and systemd's own machine-id bootstrap all legitimately
+#     write there before fs-resize's guard checks — confirmed on real
+#     hardware, via debug logging taken at the exact guard-check moment,
+#     that systemd-machine-id is genuinely present within fs-resize's own
+#     isolated boot itself. This guard only runs once per device (the
+#     .please_resize_me marker is deleted on every evaluation), so the
+#     guard trusts systemd-machine-id and ConnMan's own connman/
+#     directory wholesale, and, inside services/, only this tool's own
+#     sshd.conf; anything else there (avahi.conf, samba.conf, say) is real
+#     evidence of prior setup and still blocks resize. .kodi/.config are
+#     checked too, as the unambiguous signs Kodi has actually run. Since fs-resize's
+#     actual resize step is a destructive mke2fs reformat, not an in-place
+#     grow, this patch also backs up the provisioned WiFi config, SSH key,
+#     and sshd.conf beforehand and restores them into the freshly-formatted
+#     partition afterward — same backup/restore functions as the
+#     factory-reset patch above.
 #
 # Each patch is only applied if the image's copy of that script matches a
 # known LibreELEC version exactly (identified by md5), since these are real
 # edits to the boot squashfs and shouldn't be applied blind against a script
-# they weren't written for. The set of WiFi config files factory-reset backs
-# up is read straight off the config/wifi mount at patch time (a sibling of
-# patches_dir) and baked into the script, so only what's actually provisioned
-# there gets preserved — not ConnMan's whole runtime cache. Never fails the
-# caller — any problem is a warning and the affected script is left as-is.
+# they weren't written for. The set of WiFi config files backed up is read
+# straight off the config/wifi mount at patch time (a sibling of
+# patches_dir) and baked into whichever patched script needs it, so only
+# what's actually provisioned there gets preserved — not ConnMan's whole
+# runtime cache. Never fails the caller — any problem is a warning and the
+# affected script is left as-is.
 
 set -euo pipefail
 shopt -s nullglob
