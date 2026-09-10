@@ -26,10 +26,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-workspace_dir=/work
-if [[ ! -d "$workspace_dir/images/source" ]]; then
-    workspace_dir=$script_dir
-fi
+workspace_dir=$(cd "$script_dir/.." && pwd -P)
 
 source_dir="$workspace_dir/images/source"
 injected_dir="$workspace_dir/images/injected"
@@ -52,7 +49,7 @@ if [[ ! -f "$ssh_key_source" ]]; then
     exit 1
 fi
 
-for command_name in losetup mount umount mkdir mktemp cp chmod grep sed basename gunzip gzip mknod; do
+for command_name in losetup mount umount mkdir mktemp cp chmod grep sed basename gunzip gzip mknod unsquashfs mksquashfs patch md5sum; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'Error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -194,6 +191,9 @@ for source_image in "${source_images[@]}"; do
     cp "$ssh_key_source" "$mount_dir/.ssh/authorized_keys"
     chmod 700 "$mount_dir/.ssh"
     chmod 600 "$mount_dir/.ssh/authorized_keys"
+
+    printf '==> Checking LibreELEC system scripts for available patches\n'
+    "$script_dir/patch-system-scripts.sh" "$boot_mount_dir" "$workspace_dir/config/system-patches" || true
 
     cleanup_mounts
 

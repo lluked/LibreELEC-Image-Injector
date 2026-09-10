@@ -1,17 +1,17 @@
 services:
   libreelec-image-injector:
-    image: ubuntu:22.04
+    build: .
     privileged: true
     network_mode: none
     read_only: true
     tmpfs:
       - /tmp
-    working_dir: /work
+    working_dir: /${WORKDIR:-work}
     environment:
       IMAGE: ${IMAGE:-}
     volumes:
-      - ./images/source:/work/images/source:ro
-      - ./images/injected:/work/images/injected:rw
-      - ./config:/work/config:ro
-      - ./inject-config.sh:/work/inject-config.sh:ro
-    command: ./inject-config.sh
+      - ./images/source:/${WORKDIR:-work}/images/source:ro
+      - ./images/injected:/${WORKDIR:-work}/images/injected:rw
+      - ./config:/${WORKDIR:-work}/config:ro
+      - ./scripts:/${WORKDIR:-work}/scripts:ro
+    command: ./scripts/inject-config.sh

@@ -1,0 +1,19 @@
+--- fs-resize
++++ fs-resize
+@@ -22,7 +22,15 @@
+ 
+   # this sh** was never intended to be used
+   # on an already installed and running system
+-  if [ -d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache ] ; then
++  # NB: /storage/.cache is deliberately not checked merely for existence -
++  # headless WiFi provisioning legitimately seeds /storage/.cache/connman/*.config
++  # before first boot.  Treat the cache as initialised only if it contains
++  # anything other than the connman provisioning directory/config files.
++  if [ -d /storage/.kodi -o -d /storage/.config ] ||
++     [ -n "$(find /storage/.cache -mindepth 1 \
++         ! -path '/storage/.cache/connman' \
++         ! -path '/storage/.cache/connman/*.config' \
++         -print -quit 2>/dev/null)" ] ; then
+     rm -f /storage/.please_resize_me
+     sync
+     echo "Resizing is not permitted - the system has already been initialised." | tee -a $LOG

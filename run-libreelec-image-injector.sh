@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-run_args=(/work/inject-config.sh)
+run_args=(./scripts/inject-config.sh)
 [[ -n "$image_name" ]] && run_args+=(--image "$image_name")
 
 printf '==> Running Compose configuration injector\n'
