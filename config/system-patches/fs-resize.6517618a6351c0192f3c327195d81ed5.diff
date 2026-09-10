@@ -1,6 +1,6 @@
 --- fs-resize
 +++ fs-resize
-@@ -10,6 +10,54 @@
+@@ -10,6 +10,76 @@
    StartProgress "$@"
  }
  
@@ -25,7 +25,7 @@
 +  fi
 +}
 +
-+backup_ssh() {
++backup_ssh_authorized_keys() {
 +  rm -rf "${backup_dir}/ssh"
 +  if [ -f /storage/.ssh/authorized_keys ]; then
 +    mkdir -p "${backup_dir}/ssh"
@@ -33,7 +33,7 @@
 +  fi
 +}
 +
-+restore_ssh() {
++restore_ssh_authorized_keys() {
 +  if [ -f "${backup_dir}/ssh/authorized_keys" ]; then
 +    mkdir -p /storage/.ssh
 +    cp "${backup_dir}/ssh/authorized_keys" /storage/.ssh/
@@ -43,49 +43,74 @@
 +  fi
 +}
 +
-+# /storage/.cache is "clean" for resize purposes if the only thing in it is
-+# ConnMan's own connman/ directory (whatever ConnMan itself has put inside
-+# that - provisioning files, its own settings, managed_psk state - all of
-+# that is ConnMan's business, not evidence Kodi has run). Anything else
-+# directly under .cache is a real signal of prior initialisation.
-+cache_has_other_than_connman() {
-+  [ -n "$(find /storage/.cache -mindepth 1 -maxdepth 1 ! -name connman -print -quit 2>/dev/null)" ]
++backup_sshd_conf() {
++  rm -rf "${backup_dir}/sshd"
++  if [ -f /storage/.cache/services/sshd.conf ]; then
++    mkdir -p "${backup_dir}/sshd"
++    cp /storage/.cache/services/sshd.conf "${backup_dir}/sshd/"
++  fi
++}
++
++restore_sshd_conf() {
++  if [ -f "${backup_dir}/sshd/sshd.conf" ]; then
++    mkdir -p /storage/.cache/services
++    cp "${backup_dir}/sshd/sshd.conf" /storage/.cache/services/
++    rm -rf "${backup_dir}/sshd"
++  fi
++}
++
++# /storage/.cache is "clean" for resize purposes if the only things in it
++# are ConnMan's own connman/ directory (whatever ConnMan itself has put
++# inside it - provisioning files, its own settings, managed_psk state - is
++# ConnMan's business, not evidence Kodi has run) and, inside services/,
++# nothing but this tool's own sshd.conf - LE Settings writes other
++# services' conf files (samba.conf etc.) into that same directory when a
++# user actually configures them via the UI, and that *is* real evidence of
++# prior setup, so only the one file this tool writes is trusted, not the
++# whole directory. Anything else is a real signal of prior initialisation.
++cache_has_unexpected_content() {
++  [ -d /storage/.cache/services ] && \
++    [ -n "$(find /storage/.cache/services -mindepth 1 -maxdepth 1 ! -name sshd.conf -print -quit 2>/dev/null)" ] || \
++    [ -n "$(find /storage/.cache -mindepth 1 -maxdepth 1 ! -name connman ! -name services -print -quit 2>/dev/null)" ]
 +}
 +
  if [ -e /storage/.please_resize_me ] ; then
    . /usr/lib/libreelec/functions
  
-@@ -21,7 +69,13 @@
+@@ -21,7 +91,14 @@
  
    # this sh** was never intended to be used
    # on an already installed and running system
 -  if [ -d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache ] ; then
-+  # NB: /storage/.cache/connman is deliberately not treated as evidence of
-+  # that by itself - headless WiFi provisioning (before first boot) and
-+  # ConnMan itself (within seconds of first boot, the moment it actually
-+  # connects) both legitimately write there. Anything provisioned here
-+  # that would otherwise be lost to the mke2fs reformat below is backed up
-+  # and restored around it instead.
-+  if [ -d /storage/.kodi -o -d /storage/.config ] || cache_has_other_than_connman ; then
++  # NB: /storage/.cache/connman and /storage/.cache/services are
++  # deliberately not treated as evidence of that by themselves - headless
++  # WiFi/SSH provisioning (before first boot) and ConnMan itself (within
++  # seconds of first boot, the moment it actually connects) both
++  # legitimately write there. Anything provisioned here that would
++  # otherwise be lost to the mke2fs reformat below is backed up and
++  # restored around it instead.
++  if [ -d /storage/.kodi -o -d /storage/.config ] || cache_has_unexpected_content ; then
      rm -f /storage/.please_resize_me
      sync
      echo "Resizing is not permitted - the system has already been initialised." | tee -a $LOG
-@@ -54,6 +108,8 @@
+@@ -54,6 +131,9 @@
  
    # just in case
    if [ ! -z "$DISK" -a ! -z "$PART" -a ! -z "$UUID" ] ; then
 +    backup_wifi
-+    backup_ssh
++    backup_ssh_authorized_keys
++    backup_sshd_conf
      umount $PART
  
      echo "PARTITION RESIZING IN PROGRESS"
-@@ -64,6 +120,10 @@
+@@ -64,6 +144,11 @@
      StartProgressLog spinner "Resizing partition...   " "parted -s -f -m $DISK resizepart 2 100% >>$LOG 2>&1"
      StartProgressLog spinner "Creating file system... " "mke2fs -F -q -t ext4 -m 0 -L \"$LABEL\" -U \"$UUID\" $PART >>$LOG 2>&1"
      StartProgressLog spinner "Checking file system... " "e2fsck -f -p $PART >>$LOG 2>&1"
 +    mount $PART /storage
 +    restore_wifi
-+    restore_ssh
++    restore_ssh_authorized_keys
++    restore_sshd_conf
 +    umount $PART
      StartProgress countdown "Rebooting in 15s...     " 15 "NOW"
    else

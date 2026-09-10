@@ -192,6 +192,14 @@ for source_image in "${source_images[@]}"; do
     chmod 700 "$mount_dir/.ssh"
     chmod 600 "$mount_dir/.ssh/authorized_keys"
 
+    # Same file LE Settings' SSH toggle writes (state=on, "secure"/key-only
+    # mode) - sshd.service's ConditionPathExists on this is more reliable in
+    # practice than its ConditionKernelCommandLine on the "ssh" boot flag
+    # above, so both are set rather than relying on the boot flag alone.
+    printf '==> Enabling sshd via LE Settings config (key-only)\n'
+    mkdir -p "$mount_dir/.cache/services"
+    printf "SSHD_DISABLE_PW_AUTH=true\nSSH_ARGS=-o 'PasswordAuthentication no'\n" > "$mount_dir/.cache/services/sshd.conf"
+
     printf '==> Checking LibreELEC system scripts for available patches\n'
     "$script_dir/patch-system-scripts.sh" "$boot_mount_dir" "$workspace_dir/config/system-patches" || true
 

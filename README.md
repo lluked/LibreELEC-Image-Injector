@@ -96,28 +96,37 @@ The result lands in `images/injected/`, named `<original>_injected.img`
   and will likely overwrite manual changes.
 - A factory/storage reset from LibreELEC's **LE Settings → System → Reset**
   menu normally wipes `/storage` entirely, taking the provisioned WiFi
-  config and the SSH key with it. The injector patches the image's
-  factory-reset script (see below) to back up the exact WiFi `.config`
-  files it provisioned plus `~/.ssh/authorized_keys` before a reset and
-  restore them after, so a reset no longer knocks WiFi or SSH access out —
-  everything else under `/storage` still gets wiped as normal. Only the
-  WiFi networks this tool provisioned are preserved this way, not whatever
-  ConnMan's runtime state has accumulated since boot.
+  config, the SSH key, and the `sshd.conf` that enables SSH with it. The
+  injector patches the image's factory-reset script (see below) to back up
+  the exact WiFi `.config` files it provisioned, `~/.ssh/authorized_keys`,
+  and `.cache/services/sshd.conf` before a reset and restore them after, so
+  a reset no longer knocks WiFi or SSH access out — everything else under
+  `/storage` still gets wiped as normal. A **soft** reset only touches
+  `.cache/`, `.config/`, `.kodi/` (not `.ssh/`), so only the WiFi config
+  and `sshd.conf` need restoring there; a **hard** reset wipes everything,
+  so all three get restored. Only the WiFi networks this tool provisioned
+  are preserved this way, not whatever ConnMan's runtime state has
+  accumulated since boot.
 - The storage partition should auto-expand to fill the SD card on first
   boot. LibreELEC's own `fs-resize` normally skips that expansion if
   `/storage/.cache` has anything in it, on the theory that means Kodi has
-  already run — but WiFi provisioning puts `.config` files there before
-  first boot, and ConnMan itself writes its own `settings`/managed-PSK
-  state into `.cache/connman/` within seconds of actually connecting, so
-  that check trips even on a genuinely fresh device. The injector patches
-  `fs-resize` to only treat `.cache` as evidence of a real prior boot if it
-  contains something *other than* ConnMan's own `connman/` directory —
-  whatever's inside `connman/` is ConnMan's business either way. Because
-  `fs-resize`'s actual resize step is a destructive `mke2fs` reformat (not
-  an in-place grow), the patch also backs up the provisioned WiFi configs
-  and SSH key beforehand and restores them into the freshly-formatted
-  partition afterward, the same way the factory-reset patch does. If
-  you're running an injected image built before this fix, the partition
+  already run — but WiFi/SSH provisioning puts files there before first
+  boot, and ConnMan itself writes its own `settings`/managed-PSK state into
+  `.cache/connman/` within seconds of actually connecting, so that check
+  trips even on a genuinely fresh device. The injector patches `fs-resize`
+  to only treat `.cache` as evidence of a real prior boot if it contains
+  something *other than* ConnMan's own `connman/` directory (whatever's
+  inside it is ConnMan's own business) or, inside `services/`, anything
+  other than this tool's own `sshd.conf` — LE Settings writes other
+  services' conf files (`samba.conf` etc.) into that same directory when a
+  user actually configures them via the UI, and *that* is real evidence of
+  prior setup, so only the one file this tool writes is trusted, not the
+  whole directory. Because `fs-resize`'s actual resize
+  step is a destructive `mke2fs` reformat (not an in-place grow), the patch
+  also backs up the provisioned WiFi config, SSH key, and `sshd.conf`
+  beforehand and restores them into the freshly-formatted partition
+  afterward, the same way the factory-reset patch does. If you're running
+  an injected image built before this fix, the partition
   stays at its original (small) image size; resize it manually over SSH
   with `parted /dev/sdX resizepart 2 100%` (needs `---pretend-input-tty`
   piped `yes` if `/storage` is mounted) then `resize2fs /dev/sdX2`.
@@ -129,7 +138,7 @@ The result lands in `images/injected/`, named `<original>_injected.img`
 | `create-authorized-keys.sh` | Derives `config/authorized_keys` from an existing SSH private key. |
 | `Dockerfile` | `ubuntu:26.04` plus `squashfs-tools` and `patch`, needed to unpack/repack the boot partition's `SYSTEM` squashfs and apply the system-script patches. |
 | `compose.yaml` | Builds and runs `scripts/inject-config.sh` in a privileged, read-only container (service `libreelec-image-injector`) with the repo bind-mounted. |
-| `scripts/inject-config.sh` | Does the actual work: loop-mounts the image, enables `ssh` on the boot partition, copies WiFi configs and the SSH key onto the storage partition, and calls `patch-system-scripts.sh` to preserve WiFi/SSH across a reset and fix first-boot auto-resize. Runs as root inside the container. |
+| `scripts/inject-config.sh` | Does the actual work: loop-mounts the image, enables `ssh` on the boot partition's kernel command line *and* writes `/storage/.cache/services/sshd.conf` (the same file LE Settings' SSH toggle writes, in its key-only/password-disabled state — the boot flag alone wasn't reliably starting `sshd` on real hardware), copies WiFi configs and the SSH key onto the storage partition, and calls `patch-system-scripts.sh` to preserve WiFi/SSH across a reset and fix first-boot auto-resize. Runs as root inside the container. |
 | `scripts/patch-system-scripts.sh` | Unpacks the boot partition's `SYSTEM` squashfs once and, for each of `usr/lib/libreelec/factory-reset` and `usr/lib/libreelec/fs-resize`, hashes the script inside it and applies `config/system-patches/<script-name>.<hash>.diff` if a patch for that exact version exists — otherwise it warns and leaves that script untouched. Each diff is static (structural); for factory-reset, this script then also reads `config/wifi/*.config` directly and bakes that filename list into the patched script (replacing a `@WIFI_PROVISIONED_FILES@` placeholder), so it only ever restores what's actually provisioned there — no separate manifest file. `SYSTEM` is only repacked if at least one patch actually applied. Never fails the run. |
 | `config/system-patches/` | One unified diff per known LibreELEC script version, named `<script-name>.<md5-of-that-version>.diff` (e.g. `factory-reset.<hash>.diff`, `fs-resize.<hash>.diff`). To support a new LibreELEC version, extract the script, hash it, and add a diff named after that script and hash. |
 | `run-libreelec-image-injector.sh` | Convenience wrapper around `docker compose run` for local use. |
