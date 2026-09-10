@@ -81,49 +81,40 @@ a previous boot after a reboot, including the crucial *true first boot*.
   marker present will always reboot once extra on first boot regardless
   of outcome.
 
+## `/storage/.cache/systemd-machine-id`
+
+- `/etc/machine-id` is a symlink to `/storage/.cache/systemd-machine-id`.
+- PID1 itself unconditionally assigns *some* machine ID at the very
+  start of every boot — `journalctl` confirms the line
+  `systemd[1]: Initializing machine ID from random generator` right at
+  the start of boot — but that step alone never touches `/storage`:
+  with `/storage` not yet mounted at that point, PID1 just keeps the ID
+  in a transient in-memory overmount of `/etc/machine-id`.
+- *Persisting* it to `/storage/.cache/systemd-machine-id` is a separate
+  step, done by the real `machine-id.service` unit
+  (`WantedBy=sysinit.target`, no `ConditionPathExists` tying it to
+  `.please_resize_me` or resize state — confirmed by reading the unit
+  file directly), whose `ExecStart` is
+  `/usr/bin/systemd-machine-id-setup` — on this image, not systemd's
+  own binary but an 804-byte LibreELEC shell wrapper that
+  validates/generates the ID via `dbus-uuidgen`, unmounts that
+  transient overmount, and writes the real value to
+  `/storage/.cache/systemd-machine-id`.
+- That persisting step is an ordinary `sysinit.target`-ordered unit —
+  it has no reason to run during `fs-resize.target`'s isolated boot if
+  that isolation is actually working as intended (`fs-resize.service`
+  has `DefaultDependencies=no` specifically so an isolated resize boot
+  pulls in nothing else, `sysinit.target` included).
+
 ## Why `/storage/.cache/systemd-machine-id` shows up before `fs-resize` runs
-
-`/etc/machine-id` is a symlink to `/storage/.cache/systemd-machine-id`.
-PID1 itself unconditionally assigns *some* machine ID at the very start
-of every boot — `journalctl` confirms the line
-`systemd[1]: Initializing machine ID from random generator` right at the
-start of boot — but that step alone never touches `/storage`: with
-`/storage` not yet mounted at that point, PID1 just keeps the ID in a
-transient in-memory overmount of `/etc/machine-id`. *Persisting* it to
-`/storage/.cache/systemd-machine-id` is a separate step, done by the
-real `machine-id.service` unit (`WantedBy=sysinit.target`, no
-`ConditionPathExists` tying it to `.please_resize_me` or resize state —
-confirmed by reading the unit file directly), whose `ExecStart` is
-`/usr/bin/systemd-machine-id-setup` — on this image, not systemd's own
-binary but an 804-byte LibreELEC shell wrapper that validates/generates
-the ID via `dbus-uuidgen`, unmounts that transient overmount, and writes
-the real value to `/storage/.cache/systemd-machine-id`.
-
-That persisting step is an ordinary `sysinit.target`-ordered unit — it
-has no reason to run during `fs-resize.target`'s isolated boot if that
-isolation is actually working as intended (`fs-resize.service` has
-`DefaultDependencies=no` specifically so an isolated resize boot pulls in
-nothing else, `sysinit.target` included). Debug logging added to this
-repo's injected images (`dump_cache_state()` writing to the persistent
-`/flash/fs-resize.log`, sampled immediately before the guard check runs)
-directly confirmed `machine-id.service` had already completed and
-written the file by that point, during what was supposed to be that
-isolated boot. Whether the same thing happens on a genuinely untouched,
-unpatched image is **not** confirmed — real-world LibreELEC auto-resize
-is known to work reliably out of the box, which only makes sense if
-`machine-id.service` normally stays out of that boot entirely.
-
-This is different from the `services/*.conf` files (avahi, bluez, samba,
-crond) written on a later, ordinary boot: those only appear once
-`fs-resize`'s guard has already run and deleted the marker, since
-nothing but `fs-resize.service` starts during the isolated resize boot.
-`systemd-machine-id` is the exception — the debug log's `before-guard`
-snapshot showed it already present at that exact moment, genuinely
-written within the resize boot itself, not on some later boot. Why
-`machine-id.service` runs during a boot that's supposed to exclude it
-remains unexplained; `cache_has_unexpected_content()` allowlists it
-anyway because it isn't evidence of a *user* having configured the
-device, whatever the cause.
+- Debug logging added to this repo's injected images writing to a 
+  persistent `/flash/fs-resize.log`, (sampled immediately before the 
+  guard check runs) directly confirmed `machine-id.service` had already 
+  completed and written the file by that point.
+- Why `machine-id.service` runs during a boot that's supposed to
+  exclude it remains unexplained; `cache_has_unexpected_content()`
+  allowlists it anyway because it isn't evidence of a *user* having
+  configured the device, whatever the cause.
 
 ## Why `config/system-patches/fs-resize.*.diff` handles `.cache` the way it does
 
@@ -131,9 +122,5 @@ See `cache_has_unexpected_content()` in that diff and the comment above
 it for the current, working answer — it allowlists `systemd-machine-id`
 and `connman/` (ConnMan's own business) at the top level of `.cache`,
 and, inside `services/`, only this tool's own `sshd.conf`, while still
-treating anything else there (`avahi.conf`, `samba.conf`, say) as real
-evidence of prior setup. See project memory (`system_patches.md` in this
-repo's `.claude` memory, if available in your session) for the full
-iteration history of how this was arrived at — it took several rounds,
-each verified against the real `busybox` binary extracted from the image
-before shipping.
+treating anything else there (`avahi.conf`, `samba.conf`, etc.) as real
+evidence of prior setup.
