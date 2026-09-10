@@ -173,9 +173,20 @@ for source_image in "${source_images[@]}"; do
         exit 1
     }
 
-    config_dir="$mount_dir/.cache/connman"
+    # All provisioned config (WiFi, sshd, SSH key) is staged on the BOOT
+    # partition under .injected-config, not written to the STORAGE
+    # partition at all. Two reasons: (1) STORAGE's /storage/.cache existing
+    # at all before first boot is what lets PID1's own early machine-id
+    # commit land on disk during fs-resize's otherwise fully isolated boot
+    # (see scripts/patch-system-scripts.sh and the fs-resize diff for the
+    # full story); (2) the boot partition is never touched by fs-resize's
+    # destructive mke2fs reformat, so staging here means install-injected-config.sh
+    # (staged below) can install everything into its real location with a
+    # single plain copy, no backup-before-wipe/restore-after-wipe dance
+    # needed at all.
+    config_dir="$boot_mount_dir/.injected-config/connman"
     if [[ $wifi_enabled -eq 1 ]]; then
-        printf '==> Copying WiFi configuration\n'
+        printf '==> Staging WiFi configuration\n'
         mkdir -p "$config_dir"
         config_files=("$config_dir_source"/*.config)
         for config_file in "${config_files[@]}"; do
@@ -186,17 +197,25 @@ for source_image in "${source_images[@]}"; do
         printf '==> Skipping WiFi configuration\n'
     fi
 
-    printf '==> Installing SSH public key\n'
-    mkdir -p "$mount_dir/.ssh"
-    cp "$ssh_key_source" "$mount_dir/.ssh/authorized_keys"
-    chmod 700 "$mount_dir/.ssh"
-    chmod 600 "$mount_dir/.ssh/authorized_keys"
+    printf '==> Staging SSH public key\n'
+    mkdir -p "$boot_mount_dir/.injected-config/ssh"
+    cp "$ssh_key_source" "$boot_mount_dir/.injected-config/ssh/authorized_keys"
+    chmod 600 "$boot_mount_dir/.injected-config/ssh/authorized_keys"
 
     # Same file LE Settings' SSH toggle writes in "secure"/key-only mode
-    # (SSHD_DISABLE_PW_AUTH + SSH_ARGS).
-    printf '==> Enabling sshd via LE Settings config (key-only)\n'
-    mkdir -p "$mount_dir/.cache/services"
-    printf "SSHD_DISABLE_PW_AUTH=true\nSSH_ARGS=-o 'PasswordAuthentication no'\n" > "$mount_dir/.cache/services/sshd.conf"
+    # (SSHD_DISABLE_PW_AUTH + SSH_ARGS). Staged under .injected-config, not
+    # .cache/services, for the same reason as the WiFi config above.
+    printf '==> Staging sshd config (key-only)\n'
+    mkdir -p "$boot_mount_dir/.injected-config/services"
+    printf "SSHD_DISABLE_PW_AUTH=true\nSSH_ARGS=-o 'PasswordAuthentication no'\n" > "$boot_mount_dir/.injected-config/services/sshd.conf"
+
+    # Installer for everything staged above, run on-device by the patched
+    # fs-resize/factory-reset (see scripts/patch-system-scripts.sh). Staged
+    # here rather than baked into the SYSTEM squashfs so it isn't tied to
+    # any particular LibreELEC version.
+    printf '==> Staging install-injected-config.sh\n'
+    cp "$script_dir/install-injected-config.sh" "$boot_mount_dir/.injected-config/install-injected-config.sh"
+    chmod 755 "$boot_mount_dir/.injected-config/install-injected-config.sh"
 
     printf '==> Checking LibreELEC system scripts for available patches\n'
     "$script_dir/patch-system-scripts.sh" "$boot_mount_dir" "$workspace_dir/config/system-patches" || true

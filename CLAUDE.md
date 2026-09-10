@@ -88,41 +88,112 @@ a previous boot after a reboot, including the crucial *true first boot*.
 - PID1 itself unconditionally assigns *some* machine ID at the very
   start of every boot — `journalctl` confirms the line
   `systemd[1]: Initializing machine ID from random generator` right at
-  the start of boot — but that step alone never touches `/storage`:
-  with `/storage` not yet mounted at that point, PID1 just keeps the ID
-  in a transient in-memory overmount of `/etc/machine-id`.
-- *Persisting* it to `/storage/.cache/systemd-machine-id` is a separate
-  step, done by the real `machine-id.service` unit
-  (`WantedBy=sysinit.target`, no `ConditionPathExists` tying it to
-  `.please_resize_me` or resize state — confirmed by reading the unit
-  file directly), whose `ExecStart` is
-  `/usr/bin/systemd-machine-id-setup` — on this image, not systemd's
-  own binary but an 804-byte LibreELEC shell wrapper that
-  validates/generates the ID via `dbus-uuidgen`, unmounts that
-  transient overmount, and writes the real value to
-  `/storage/.cache/systemd-machine-id`.
-- That persisting step is an ordinary `sysinit.target`-ordered unit —
-  it has no reason to run during `fs-resize.target`'s isolated boot if
-  that isolation is actually working as intended (`fs-resize.service`
-  has `DefaultDependencies=no` specifically so an isolated resize boot
-  pulls in nothing else, `sysinit.target` included).
+  the start of boot. Making that ID show up on disk at
+  `/storage/.cache/systemd-machine-id` happens two different ways
+  depending on whether `/storage/.cache` already exists:
+  - If `/storage/.cache` does **not** exist yet, PID1 has nowhere to
+    land its early overmount (it doesn't `mkdir -p` the path itself),
+    so it just keeps the ID in memory. Real persistence then waits for
+    the proper `machine-id.service` unit (`WantedBy=sysinit.target`,
+    `ExecStart=/usr/bin/systemd-machine-id-setup` — on this image not
+    systemd's own binary but a LibreELEC shell wrapper that
+    `mkdir -p /storage/.cache` before writing). That unit is an
+    ordinary `sysinit.target`-ordered job with no `ConditionPathExists`
+    tying it to `.please_resize_me` or resize state (confirmed by
+    reading the unit file directly).
+  - If `/storage/.cache` **already exists** (as a real directory, from
+    before this boot), PID1's own early machine-id overmount succeeds
+    immediately against that existing path — confirmed by the LibreELEC
+    `systemd-machine-id-setup` wrapper itself, which opens with
+    `umount /storage/.cache/systemd-machine-id` under the comment "For
+    first boot detection systemd may have overmounted the file". This
+    happens independent of the unit/target graph entirely — it isn't a
+    systemd job that `fs-resize.target`'s isolation could ever exclude.
 
-## Why `/storage/.cache/systemd-machine-id` shows up before `fs-resize` runs
+## Why `/storage/.cache/systemd-machine-id` used to show up before `fs-resize` ran
 
 - Debug logging added to this repo's injected images, writing to a
   persistent `/flash/fs-resize.log` (sampled immediately before the
-  guard check runs), directly confirmed `machine-id.service` had already
-  completed and written the file by that point.
-- Why `machine-id.service` runs during a boot that's supposed to
-  exclude it remains unexplained; `cache_has_unexpected_content()`
-  allowlists it anyway because it isn't evidence of a *user* having
-  configured the device, whatever the cause.
+  guard check runs), directly confirmed the file was already written by
+  that point, on every injected image — never on a clean/untouched one
+  (confirmed by diffing the extracted `SYSTEM` squashfs of both:
+  `machine-id.service`, `libreelec-target-generator`,
+  `storage.mount.d/dependencies.conf`, and the `systemd-machine-id-setup`
+  wrapper are byte-for-byte identical between clean and injected images,
+  so the difference was never in any of that boot machinery).
+- The cause was `inject-config.sh` itself: it used to `mkdir -p
+  "$mount_dir/.cache/services"` (writing `sshd.conf`) and, when WiFi was
+  provisioned, `mkdir -p .cache/connman` too — directly on the STORAGE
+  partition, on the host, before the device ever booted. That made
+  `/storage/.cache` already exist as a real directory the moment
+  `/storage` mounted on first boot, which is exactly the precondition
+  above for PID1's early, job-graph-independent machine-id write to land
+  on disk — even during `fs-resize.target`'s otherwise fully isolated
+  boot.
+- Fixed at the source rather than only allowlisted: `inject-config.sh`
+  now stages *everything* it provisions — WiFi config, `sshd.conf`,
+  `.ssh/authorized_keys`, and `scripts/install-injected-config.sh`
+  itself — under `/flash/.injected-config` (see `scripts/inject-config.sh`),
+  on the **boot** partition, not `/storage` at all. `/storage/.cache`
+  genuinely doesn't exist yet when `/storage` first mounts on an
+  injected image, same as a clean one. The patched `fs-resize` script
+  calls `sh /flash/.injected-config/install-injected-config.sh`, which
+  copies the staged files from `/flash/.injected-config` into their real
+  `/storage/.cache`/`/storage/.ssh` locations, after its guard check has
+  already run. `install-injected-config.sh` isn't baked into the
+  `SYSTEM` squashfs — it's just another file staged on `/flash` by
+  `inject-config.sh`, so it's never tied to a particular LibreELEC
+  version the way the `fs-resize`/`factory-reset` diffs are. Staging on
+  `/flash` rather than `/storage` also means none of this needs backing
+  up before `fs-resize`'s `mke2fs` reformat — the boot partition is
+  never touched by it, so the old `/run`-tmpfs backup/restore mechanism
+  this section used to describe is gone entirely; the call is a single
+  plain script invocation, made after the reformat (or in the guard's
+  reject path, or the "partition not detected" abort path — whichever
+  the script actually takes).
+- `/flash/.injected-config` is permanent — neither the `fs-resize` nor
+  the `factory-reset` patch ever deletes it. `factory-reset`'s patched
+  script makes the same `sh /flash/.injected-config/install-injected-config.sh`
+  call after every hard/soft reset too, so a reset always reinstalls the
+  *originally injected* WiFi/sshd/SSH config, discarding whatever was
+  actually live on the device. There's no backup of live `/storage`
+  state anywhere in either patch anymore (that used to be
+  `factory-reset`'s whole reason for its own `backup_wifi`/
+  `backup_ssh_authorized_keys`/`backup_sshd_conf` — deliberately removed
+  now). Changing WiFi/SSH credentials means re-injecting and reflashing
+  a new image, not reconfiguring the live device and expecting a reset
+  to remember it.
 
-## Why `config/system-patches/fs-resize.*.diff` handles `.cache` the way it does
+## Why `config/system-patches/fs-resize.*.diff` no longer touches the `.cache` guard at all
 
-See `cache_has_unexpected_content()` in that diff and the comment above
-it for the current, working answer — it allowlists `systemd-machine-id`
-and `connman/` (ConnMan's own business) at the top level of `.cache`,
-and, inside `services/`, only this tool's own `sshd.conf`, while still
-treating anything else there (`avahi.conf`, `samba.conf`, etc.) as real
-evidence of prior setup.
+Earlier versions of this diff added an allowlist function
+(`cache_has_unexpected_content()`) so the guard would tolerate
+`systemd-machine-id`/`connman/`/`services/sshd.conf` under `.cache` —
+needed back when `inject-config.sh` wrote provisioned config straight
+into `/storage/.cache`. Now that provisioning stages entirely through
+`/flash/.injected-config` instead (see the section above),
+`/storage/.cache` genuinely never exists at guard-check time on a
+freshly injected image, so the guard needed nothing special at all. The
+current diff leaves the guard completely untouched from stock —
+`if [ -d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache ]`
+— and only adds the
+`sh /flash/.injected-config/install-injected-config.sh` call, made after
+the guard has already run (in the resize-success path, the "already
+initialised" reject path, and the "partition not detected" abort path
+alike).
+
+One consequence of the guard being genuinely stock again: a device
+already past its first boot, manually re-pointed at `.please_resize_me`
+for a resize retry, with real, live `/storage/.cache` content, is
+correctly blocked as "already initialised" rather than resized — same
+as it would be on a completely unmodified image (the partition itself
+is never reformatted in this path). But `install-injected-config.sh`
+is still called in this reject branch too, and `/flash/.injected-config`
+is permanent (never deleted — see the section above), so a rejected
+retry still overwrites `/storage/.cache/connman`,
+`/storage/.cache/services/sshd.conf`, and `/storage/.ssh/authorized_keys`
+with the *originally injected* values, even though the resize itself
+didn't happen. That's intentional, consistent with
+`/flash/.injected-config` being the permanent source of truth for the
+whole device lifetime (see above) — not a leftover from when the guard
+still needed careful handling around this branch.

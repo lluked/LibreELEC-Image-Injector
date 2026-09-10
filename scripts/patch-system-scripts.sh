@@ -1,46 +1,50 @@
 #!/usr/bin/env bash
-# Patch LibreELEC scripts baked into the boot partition's SYSTEM squashfs:
-#   - usr/lib/libreelec/factory-reset: preserve the provisioned WiFi config,
-#     the SSH key, and the sshd.conf that enables SSH across a device reset,
-#     instead of losing them to the storage wipe. Soft reset only needs
-#     WiFi + sshd.conf restored (its delete list never touches .ssh/); hard
-#     reset needs all three (it wipes everything).
-#   - usr/lib/libreelec/fs-resize: stop the on-device first-boot auto-resize
-#     from refusing to run just because /storage/.cache has something in it.
-#     WiFi/SSH provisioning, ConnMan itself (the moment it actually
-#     connects), and systemd's own machine-id bootstrap all legitimately
-#     write there before fs-resize's guard checks — confirmed on real
-#     hardware, via debug logging taken at the exact guard-check moment,
-#     that systemd-machine-id is genuinely present within fs-resize's own
-#     isolated boot itself. This guard only runs once per device (the
-#     .please_resize_me marker is deleted on every evaluation), so the
-#     guard trusts systemd-machine-id and ConnMan's own connman/
-#     directory wholesale, and, inside services/, only this tool's own
-#     sshd.conf; anything else there (avahi.conf, samba.conf, say) is real
-#     evidence of prior setup and still blocks resize. .kodi/.config are
-#     checked too, as the unambiguous signs Kodi has actually run. Since fs-resize's
-#     actual resize step is a destructive mke2fs reformat, not an in-place
-#     grow, this patch also backs up the provisioned WiFi config, SSH key,
-#     and sshd.conf beforehand and restores them into the freshly-formatted
-#     partition afterward — same backup/restore functions as the
-#     factory-reset patch above.
+# Patch LibreELEC scripts baked into the boot partition's SYSTEM squashfs.
 #
-# Each patch is only applied if the image's copy of that script matches a
-# known LibreELEC version exactly (identified by md5), since these are real
-# edits to the boot squashfs and shouldn't be applied blind against a script
-# they weren't written for. The set of WiFi config files backed up is read
-# straight off the config/wifi mount at patch time (a sibling of
-# patches_dir) and baked into whichever patched script needs it, so only
-# what's actually provisioned there gets preserved — not ConnMan's whole
-# runtime cache. Never fails the caller — any problem is a warning and the
-# affected script is left as-is.
+# inject-config.sh stages everything it provisions (WiFi config,
+# sshd.conf, SSH key, and scripts/install-injected-config.sh itself)
+# under /flash/.injected-config, on the BOOT partition — never under
+# /storage directly (see inject-config.sh for why: writing straight to
+# /storage/.cache used to let PID1's own early machine-id commit land on
+# disk during fs-resize's otherwise fully isolated first-boot resize).
+# /flash/.injected-config is permanent — nothing ever deletes it — so it
+# stays the single source of truth for the life of the device. There is
+# no backup/restore of live /storage state anywhere in either patch: a
+# reset (or a later manual fs-resize retry) always reinstalls from
+# /flash/.injected-config, discarding whatever was actually live on
+# /storage. Re-injecting a new image is how WiFi/SSH config changes, not
+# reconfiguring the live device and expecting a reset to remember it.
+#   - usr/lib/libreelec/fs-resize: patched to call
+#     `sh /flash/.injected-config/install-injected-config.sh` — which
+#     copies /flash/.injected-config into its real /storage location
+#     (/storage/.cache/connman, /storage/.cache/services, /storage/.ssh)
+#     — after the resize, after the guard rejects it, or after it aborts
+#     for want of a detected partition, whichever the script actually
+#     takes. The guard itself
+#     (`-d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache`)
+#     is left completely stock/unmodified: since nothing is ever written
+#     to /storage before this boot, /storage/.cache genuinely doesn't
+#     exist at guard-check time on an injected image, same as a clean
+#     one, so no allowlisting is needed.
+#   - usr/lib/libreelec/factory-reset: patched to make the same call,
+#     after the storage wipe (hard reset) or the cache/config/kodi
+#     delete (soft reset).
+#
+# install-injected-config.sh itself isn't touched by this script at all —
+# it's staged directly onto /flash by inject-config.sh, like the rest of
+# /flash/.injected-config, so it's never tied to any particular
+# LibreELEC version the way these two diffs are. Each patch here is only
+# applied if the image's copy of that script matches a known LibreELEC
+# version exactly (identified by md5), since these are real edits to the
+# boot squashfs and shouldn't be applied blind against a script they
+# weren't written for. Never fails the caller — any problem is a warning
+# and the affected script is left as-is.
 
 set -euo pipefail
 shopt -s nullglob
 
 boot_mount_dir=$1
 patches_dir=$2
-wifi_config_dir="$(dirname "$patches_dir")/wifi"
 
 system_file="$boot_mount_dir/SYSTEM"
 
@@ -93,18 +97,6 @@ apply_patch usr/lib/libreelec/fs-resize
 if [[ $patched_anything -eq 0 ]]; then
     exit 0
 fi
-
-wifi_config_names=""
-for wifi_config_file in "$wifi_config_dir"/*.config; do
-    wifi_config_names="$wifi_config_names $(basename "$wifi_config_file")"
-done
-wifi_config_names_escaped=$(printf '%s' "$wifi_config_names" | sed -e 's/[\&|]/\\&/g')
-
-for patched_script in "$work_dir/root/usr/lib/libreelec/factory-reset" "$work_dir/root/usr/lib/libreelec/fs-resize"; do
-    if [[ -f "$patched_script" ]] && grep -q '@WIFI_PROVISIONED_FILES@' "$patched_script"; then
-        sed -i "s|@WIFI_PROVISIONED_FILES@|$wifi_config_names_escaped|" "$patched_script"
-    fi
-done
 
 new_system_file="$work_dir/SYSTEM.new"
 if ! mksquashfs "$work_dir/root" "$new_system_file" -comp zstd -Xcompression-level 19 -b 1048576 -no-xattrs -noappend >/dev/null 2>&1; then
