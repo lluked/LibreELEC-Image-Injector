@@ -1,0 +1,23 @@
+--- factory-reset
++++ factory-reset
+@@ -57,8 +57,12 @@
+       if [ -n "${uuid}" ]; then
+         tune2fs -U "${uuid}" "${target}" &>/dev/null
+       fi
++      mount "${target}" /storage
++      sh /flash/.injected-config/install-injected-config.sh
++      umount /storage
+     else
+       find /storage/ -mindepth 1 -delete
++      sh /flash/.injected-config/install-injected-config.sh
+     fi
+     StopProgress "done!"
+ 
+@@ -74,6 +78,7 @@
+ 
+     StartProgress spinner "Performing soft reset... "
+       find /storage/.cache/ /storage/.config/ /storage/.kodi/ -mindepth 1 -delete
++      sh /flash/.injected-config/install-injected-config.sh
+     StopProgress "done!"
+ 
+     echo

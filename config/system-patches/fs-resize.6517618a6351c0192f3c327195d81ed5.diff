@@ -1,0 +1,23 @@
+--- fs-resize
++++ fs-resize
+@@ -22,6 +22,7 @@
+   # this sh** was never intended to be used
+   # on an already installed and running system
+   if [ -d /storage/.kodi -o -d /storage/.config -o -d /storage/.cache ] ; then
++    sh /flash/.injected-config/install-injected-config.sh
+     rm -f /storage/.please_resize_me
+     sync
+     echo "Resizing is not permitted - the system has already been initialised." | tee -a $LOG
+@@ -64,8 +65,12 @@
+     StartProgressLog spinner "Resizing partition...   " "parted -s -f -m $DISK resizepart 2 100% >>$LOG 2>&1"
+     StartProgressLog spinner "Creating file system... " "mke2fs -F -q -t ext4 -m 0 -L \"$LABEL\" -U \"$UUID\" $PART >>$LOG 2>&1"
+     StartProgressLog spinner "Checking file system... " "e2fsck -f -p $PART >>$LOG 2>&1"
++    mount $PART /storage
++    sh /flash/.injected-config/install-injected-config.sh
++    umount $PART
+     StartProgress countdown "Rebooting in 15s...     " 15 "NOW"
+   else
++    sh /flash/.injected-config/install-injected-config.sh
+     echo "Partition was not detected - resizing aborted."
+     StartProgress countdown "Rebooting in 15s... " 15 "NOW"
+   fi
