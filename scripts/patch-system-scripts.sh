@@ -3,9 +3,16 @@
 #   - usr/lib/libreelec/factory-reset: preserve WiFi and SSH config across a
 #     device reset instead of losing them to the storage wipe.
 #   - usr/lib/libreelec/fs-resize: stop the on-device first-boot auto-resize
-#     from refusing to run just because /storage/.cache/connman was seeded
-#     with provisioning files before first boot (it otherwise reads that as
-#     "already initialised" and skips resizing the storage partition).
+#     from refusing to run just because /storage/.cache has anything in it
+#     (WiFi provisioning, and ConnMan itself the moment it connects, both
+#     put real content there before fs-resize ever checks — trying to
+#     itemize what's "allowed" there is a losing game, so the check is
+#     narrowed to .kodi/.config instead, which are the only unambiguous
+#     signs Kodi has actually run). Since fs-resize's actual resize step is
+#     a destructive mke2fs reformat, not an in-place grow, this patch also
+#     backs up the provisioned WiFi configs and SSH key beforehand and
+#     restores them into the freshly-formatted partition afterward — same
+#     backup/restore functions as the factory-reset patch below.
 #
 # Each patch is only applied if the image's copy of that script matches a
 # known LibreELEC version exactly (identified by md5), since these are real
@@ -75,15 +82,17 @@ if [[ $patched_anything -eq 0 ]]; then
     exit 0
 fi
 
-reset_script="$work_dir/root/usr/lib/libreelec/factory-reset"
-if [[ -f "$reset_script" ]] && grep -q '@WIFI_PROVISIONED_FILES@' "$reset_script"; then
-    wifi_config_names=""
-    for wifi_config_file in "$wifi_config_dir"/*.config; do
-        wifi_config_names="$wifi_config_names $(basename "$wifi_config_file")"
-    done
-    wifi_config_names_escaped=$(printf '%s' "$wifi_config_names" | sed -e 's/[\&|]/\\&/g')
-    sed -i "s|@WIFI_PROVISIONED_FILES@|$wifi_config_names_escaped|" "$reset_script"
-fi
+wifi_config_names=""
+for wifi_config_file in "$wifi_config_dir"/*.config; do
+    wifi_config_names="$wifi_config_names $(basename "$wifi_config_file")"
+done
+wifi_config_names_escaped=$(printf '%s' "$wifi_config_names" | sed -e 's/[\&|]/\\&/g')
+
+for patched_script in "$work_dir/root/usr/lib/libreelec/factory-reset" "$work_dir/root/usr/lib/libreelec/fs-resize"; do
+    if [[ -f "$patched_script" ]] && grep -q '@WIFI_PROVISIONED_FILES@' "$patched_script"; then
+        sed -i "s|@WIFI_PROVISIONED_FILES@|$wifi_config_names_escaped|" "$patched_script"
+    fi
+done
 
 new_system_file="$work_dir/SYSTEM.new"
 if ! mksquashfs "$work_dir/root" "$new_system_file" -comp zstd -Xcompression-level 19 -b 1048576 -no-xattrs -noappend >/dev/null 2>&1; then

@@ -104,15 +104,23 @@ The result lands in `images/injected/`, named `<original>_injected.img`
   WiFi networks this tool provisioned are preserved this way, not whatever
   ConnMan's runtime state has accumulated since boot.
 - The storage partition should auto-expand to fill the SD card on first
-  boot. LibreELEC's own `fs-resize` skips that expansion if it finds
-  `/storage/.cache` already present — which provisioning WiFi always
-  causes, since that's where the `.config` files live — so the injector
-  also patches `fs-resize` to stop treating a provisioned `.cache/connman`
-  as "already initialised". If you're running an injected image built
-  before this fix, the partition stays at its original (small) image size;
-  resize it manually over SSH with `parted /dev/sdX resizepart 2 100%`
-  (needs `---pretend-input-tty` piped `yes` if `/storage` is mounted) then
-  `resize2fs /dev/sdX2`.
+  boot. LibreELEC's own `fs-resize` normally skips that expansion if
+  `/storage/.cache` has anything in it, on the theory that means Kodi has
+  already run — but WiFi provisioning puts `.config` files there before
+  first boot, and ConnMan itself writes its own `settings`/managed-PSK
+  state into `.cache/connman/` within seconds of actually connecting, so
+  that check trips even on a genuinely fresh device. The injector patches
+  `fs-resize` to only treat `.cache` as evidence of a real prior boot if it
+  contains something *other than* ConnMan's own `connman/` directory —
+  whatever's inside `connman/` is ConnMan's business either way. Because
+  `fs-resize`'s actual resize step is a destructive `mke2fs` reformat (not
+  an in-place grow), the patch also backs up the provisioned WiFi configs
+  and SSH key beforehand and restores them into the freshly-formatted
+  partition afterward, the same way the factory-reset patch does. If
+  you're running an injected image built before this fix, the partition
+  stays at its original (small) image size; resize it manually over SSH
+  with `parted /dev/sdX resizepart 2 100%` (needs `---pretend-input-tty`
+  piped `yes` if `/storage` is mounted) then `resize2fs /dev/sdX2`.
 
 ## Files
 
